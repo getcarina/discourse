@@ -174,6 +174,7 @@ end
 gem 'rmmseg-cpp', require: false
 
 gem 'logster'
+gem 'remote_syslog_logger'
 
 # perftools only works on 1.9 atm
 group :profile do
