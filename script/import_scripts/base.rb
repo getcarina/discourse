@@ -199,7 +199,7 @@ class ImportScripts::Base
 
     Post.exec_sql('create temp table import_ids(val varchar(200) primary key)')
 
-    import_id_clause = import_ids.map{|id| "('#{PG::Connection.escape_string(id)}')"}.join(",")
+    import_id_clause = import_ids.map{|id| "('#{PG::Connection.escape_string(id.to_s)}')"}.join(",")
     Post.exec_sql("insert into import_ids values #{import_id_clause}")
 
     existing = "#{type.to_s.classify}CustomField".constantize.where(name: 'import_id')
@@ -239,14 +239,18 @@ class ImportScripts::Base
         elsif u[:email].present?
           new_user = create_user(u, import_id)
 
-          if new_user.valid? && new_user.user_profile.valid?
+          if new_user && new_user.valid? && new_user.user_profile && new_user.user_profile.valid?
             @lookup.add_user(import_id.to_s, new_user)
             created += 1
           else
             failed += 1
-            puts "Failed to create user id: #{import_id}, username: #{new_user.username}, email: #{new_user.email}"
-            puts "user errors: #{new_user.errors.full_messages}"
-            puts "user_profile errors: #{new_user.user_profiler.errors.full_messages}"
+            puts "Failed to create user id: #{import_id}, username: #{new_user.try(:username)}, email: #{new_user.try(:email)}"
+            if new_user.try(:errors)
+              puts "user errors: #{new_user.errors.full_messages}"
+              if new_user.try(:user_profile).try(:errors)
+                puts "user_profile errors: #{new_user.user_profile.errors.full_messages}"
+              end
+            end
           end
         else
           failed += 1
@@ -273,6 +277,10 @@ class ImportScripts::Base
     location = opts.delete(:location)
     avatar_url = opts.delete(:avatar_url)
 
+    # Allow the || operations to work with empty strings ''
+    opts[:name] = nil if opts[:name].blank?
+    opts[:username] = nil if opts[:username].blank?
+
     opts[:name] = User.suggest_name(opts[:email]) unless opts[:name]
     if opts[:username].blank? ||
       opts[:username].length < User.username_length.begin ||
@@ -288,6 +296,7 @@ class ImportScripts::Base
     opts[:last_emailed_at] = opts.fetch(:last_emailed_at, Time.now)
 
     u = User.new(opts)
+    (opts[:custom_fields] || {}).each { |k, v| u.custom_fields[k] = v }
     u.custom_fields["import_id"] = import_id
     u.custom_fields["import_username"] = opts[:username] if opts[:username].present?
     u.custom_fields["import_avatar_url"] = avatar_url if avatar_url.present?
@@ -309,18 +318,18 @@ class ImportScripts::Base
       end
     rescue => e
       # try based on email
-      if e.record.errors.messages[:email].present?
-        existing = User.find_by(email: opts[:email].downcase)
-        if existing
+      if e.try(:record).try(:errors).try(:messages).try(:[], :email).present?
+        if existing = User.find_by(email: opts[:email].downcase)
           existing.custom_fields["import_id"] = import_id
           existing.save!
           u = existing
         end
       else
-        puts "Error on record: #{opts}"
+        puts "Error on record: #{opts.inspect}"
         raise e
       end
     end
+
     post_create_action.try(:call, u) if u.persisted?
 
     u # If there was an error creating the user, u.errors has the messages

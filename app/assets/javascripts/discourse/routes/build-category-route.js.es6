@@ -1,5 +1,7 @@
 import { filterQueryParams, findTopicList } from 'discourse/routes/build-topic-route';
 import { queryParams } from 'discourse/controllers/discovery-sortable';
+import TopicList from 'discourse/models/topic-list';
+import PermissionType from 'discourse/models/permission-type';
 
 // A helper function to create a category route with parameters
 export default (filter, params) => {
@@ -7,7 +9,7 @@ export default (filter, params) => {
     queryParams,
 
     model(modelParams) {
-      return Discourse.Category.findBySlug(modelParams.slug, modelParams.parentSlug);
+      return { category: Discourse.Category.findBySlug(modelParams.slug, modelParams.parentSlug) };
     },
 
     afterModel(model, transition) {
@@ -16,56 +18,58 @@ export default (filter, params) => {
         return;
       }
 
-      this._setupNavigation(model);
-      return Em.RSVP.all([this._createSubcategoryList(model),
-                          this._retrieveTopicList(model, transition)]);
+      this._setupNavigation(model.category);
+      return Em.RSVP.all([this._createSubcategoryList(model.category),
+                          this._retrieveTopicList(model.category, transition)]);
     },
 
-    _setupNavigation(model) {
+    _setupNavigation(category) {
       const noSubcategories = params && !!params.no_subcategories,
-            filterMode = `c/${Discourse.Category.slugFor(model)}${noSubcategories ? "/none" : ""}/l/${filter}`;
+            filterMode = `c/${Discourse.Category.slugFor(category)}${noSubcategories ? "/none" : ""}/l/${filter}`;
 
       this.controllerFor('navigation/category').setProperties({
-        category: model,
+        category,
         filterMode: filterMode,
         noSubcategories: params && params.no_subcategories,
-        canEditCategory: model.get('can_edit')
+        canEditCategory: category.get('can_edit')
       });
     },
 
-    _createSubcategoryList(model) {
+    _createSubcategoryList(category) {
       this._categoryList = null;
-      if (Em.isNone(model.get('parentCategory')) && Discourse.SiteSettings.show_subcategory_list) {
-        return Discourse.CategoryList.listForParent(this.store, model)
-                                     .then(list => this._categoryList = list);
+      if (Em.isNone(category.get('parentCategory')) && Discourse.SiteSettings.show_subcategory_list) {
+        const CategoryList = require('discourse/models/category-list').default;
+        return CategoryList.listForParent(this.store, category).then(list => this._categoryList = list);
       }
 
       // If we're not loading a subcategory list just resolve
       return Em.RSVP.resolve();
     },
 
-    _retrieveTopicList(model, transition) {
-      const listFilter = `c/${Discourse.Category.slugFor(model)}/l/${filter}`,
+    _retrieveTopicList(category, transition) {
+      const listFilter = `c/${Discourse.Category.slugFor(category)}/l/${filter}`,
             findOpts = filterQueryParams(transition.queryParams, params),
              extras = { cached: this.isPoppedState(transition) };
 
       return findTopicList(this.store, this.topicTrackingState, listFilter, findOpts, extras).then(list => {
-        Discourse.TopicList.hideUniformCategory(list, model);
+        TopicList.hideUniformCategory(list, category);
         this.set('topics', list);
+        return list;
       });
     },
 
     titleToken() {
-      const filterText = I18n.t('filters.' + filter.replace('/', '.') + '.title', { count: 0 }),
-            model = this.currentModel;
+      const filterText = I18n.t('filters.' + filter.replace('/', '.') + '.title'),
+            category = this.currentModel.category;
 
-      return I18n.t('filters.with_category', { filter: filterText, category: model.get('name') });
+      return I18n.t('filters.with_category', { filter: filterText, category: category.get('name') });
     },
 
     setupController(controller, model) {
       const topics = this.get('topics'),
+            category = model.category,
             canCreateTopic = topics.get('can_create_topic'),
-            canCreateTopicOnCategory = model.get('permission') === Discourse.PermissionType.FULL;
+            canCreateTopicOnCategory = category.get('permission') === PermissionType.FULL;
 
       this.controllerFor('navigation/category').setProperties({
         canCreateTopicOnCategory: canCreateTopicOnCategory,
@@ -75,7 +79,7 @@ export default (filter, params) => {
 
       var topicOpts = {
         model: topics,
-        category: model,
+        category,
         period: topics.get('for_period') || (filter.indexOf('/') > 0 ? filter.split('/')[1] : ''),
         selected: [],
         noSubcategories: params && !!params.no_subcategories,
@@ -84,7 +88,7 @@ export default (filter, params) => {
         canCreateTopicOnCategory: canCreateTopicOnCategory
       };
 
-      const p = model.get('params');
+      const p = category.get('params');
       if (p && Object.keys(p).length) {
         if (p.order !== undefined) {
           topicOpts.order = p.order;
@@ -95,7 +99,7 @@ export default (filter, params) => {
       }
 
       this.controllerFor('discovery/topics').setProperties(topicOpts);
-      this.searchService.set('searchContext', model.get('searchContext'));
+      this.searchService.set('searchContext', category.get('searchContext'));
       this.set('topics', null);
 
       this.openTopicDraft(topics);

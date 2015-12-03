@@ -54,7 +54,8 @@ const controllerOpts = {
       this.set('controllers.discovery.loading', true);
 
       this.store.findFiltered('topicList', {filter}).then(list => {
-        Discourse.TopicList.hideUniformCategory(list, this.get('category'));
+        const TopicList = require('discourse/models/topic-list').default;
+        TopicList.hideUniformCategory(list, this.get('category'));
 
         this.setProperties({ model: list });
         this.resetSelected();
@@ -73,7 +74,7 @@ const controllerOpts = {
     },
 
     dismissReadPosts() {
-      showModal('dismiss-read', { title: 'topics.bulk.dismiss' });
+      showModal('dismiss-read', { title: 'topics.bulk.dismiss_read' });
     }
   },
 

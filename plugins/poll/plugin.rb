@@ -22,9 +22,17 @@ DEFAULT_POLL_NAME ||= "poll".freeze
 
 after_initialize do
 
-  # remove "Vote Now!" & "Show Results" links in emails
-  Email::Styles.register_plugin_style do |fragment|
-    fragment.css(".poll a.cast-votes, .poll a.toggle-results").each(&:remove)
+  # turn polls into a link in emails
+  Email::Styles.register_plugin_style do |fragment, opts|
+    post = Post.find_by(id: opts[:post_id]) rescue nil
+    if post.nil? || post.trashed?
+      fragment.css(".poll").each(&:remove)
+    else
+      post_url = "#{Discourse.base_url}#{post.url}"
+      fragment.css(".poll").each do |poll|
+        poll.replace "<p><a href='#{post_url}'>#{I18n.t("poll.email.link_to_poll")}</a></p>"
+      end
+    end
   end
 
   module ::DiscoursePoll
@@ -66,16 +74,20 @@ after_initialize do
 
           raise StandardError.new I18n.t("poll.requires_at_least_1_valid_option") if options.empty?
 
+          poll["voters"] = 0
+          all_options = Hash.new(0)
+
           post.custom_fields[VOTES_CUSTOM_FIELD] ||= {}
           post.custom_fields[VOTES_CUSTOM_FIELD]["#{user_id}"] ||= {}
           post.custom_fields[VOTES_CUSTOM_FIELD]["#{user_id}"][poll_name] = options
 
-          votes = post.custom_fields[VOTES_CUSTOM_FIELD]
-          poll["voters"] = votes.values.count { |v| v.has_key?(poll_name) }
+          post.custom_fields[VOTES_CUSTOM_FIELD].each do |user_id, user_votes|
+            next unless votes = user_votes[poll_name]
+            votes.each { |option| all_options[option] += 1 }
+            poll["voters"] += 1 if (available_options & votes.to_set).size > 0
+          end
 
-          all_options = Hash.new(0)
-          votes.map { |_, v| v[poll_name] }.flatten.each { |o| all_options[o] += 1 }
-          poll["options"].each { |option| option["votes"] = all_options[option["id"]] }
+          poll["options"].each { |o| o["votes"] = all_options[o["id"]] }
 
           post.custom_fields[POLLS_CUSTOM_FIELD] = polls
           post.save_custom_fields(true)

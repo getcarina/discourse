@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require 'topic_view'
 
 describe TopicQuery do
@@ -374,6 +374,7 @@ describe TopicQuery do
 
         it "returns an empty set" do
           expect(topics).to be_blank
+          expect(topic_query.list_latest.topics).to be_blank
         end
 
         context 'un-muted' do
@@ -383,6 +384,7 @@ describe TopicQuery do
 
           it "returns the topic again" do
             expect(topics).to eq([new_topic])
+            expect(topic_query.list_latest.topics).not_to be_blank
           end
         end
       end

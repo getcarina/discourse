@@ -58,12 +58,17 @@ module Email
 
         user_email = @message.from.first
         @user = User.find_by_email(user_email)
-        if @user.blank? && @allow_strangers
 
-          wrap_body_in_quote user_email
-          # TODO This is WRONG it should register an account
-          # and email the user details on how to log in / activate
-          @user = Discourse.system_user
+        # create staged account when user doesn't exist
+        if @user.blank? && @allow_strangers
+          if SiteSetting.allow_staged_accounts
+            username = UserNameSuggester.suggest(user_email)
+            name = User.suggest_name(user_email)
+            @user = User.create(email: user_email, username: username, name: name, staged: true)
+          else
+            wrap_body_in_quote(user_email)
+            @user = Discourse.system_user
+          end
         end
 
         raise UserNotFoundError if @user.blank?
@@ -117,15 +122,12 @@ module Email
 
     def select_body(message)
       html = nil
-      # If the message is multipart, return that part (favor html)
-      if message.multipart?
-        html = fix_charset message.html_part
-        text = fix_charset message.text_part
 
-        # prefer plain text
-        if text
-          return text
-        end
+      if message.multipart?
+        text = fix_charset message.text_part
+        # prefer text over html
+        return text if text
+        html = fix_charset message.html_part
       elsif message.content_type =~ /text\/html/
         html = fix_charset message
       end
@@ -162,37 +164,45 @@ module Email
     REPLYING_HEADER_LABELS = ['From', 'Sent', 'To', 'Subject', 'Reply To', 'Cc', 'Bcc', 'Date']
     REPLYING_HEADER_REGEX = Regexp.union(REPLYING_HEADER_LABELS.map { |lbl| "#{lbl}:" })
 
+    def line_is_quote?(l)
+      l =~ /\A\s*\-{3,80}\s*\z/ ||
+      l =~ Regexp.new("\\A\\s*" + I18n.t('user_notifications.previous_discussion') + "\\s*\\Z") ||
+      (l =~ /via #{SiteSetting.title}(.*)\:$/) ||
+      # This one might be controversial but so many reply lines have years, times and end with a colon.
+      # Let's try it and see how well it works.
+      (l =~ /\d{4}/ && l =~ /\d:\d\d/ && l =~ /\:$/) ||
+      (l =~ /On [\w, ]+\d+.*wrote:/)
+    end
+
     def discourse_email_trimmer(body)
       lines = body.scrub.lines.to_a
+      range_start = 0
       range_end = 0
 
+      # If we started with a quote, skip it
       lines.each_with_index do |l, idx|
-        break if l =~ /\A\s*\-{3,80}\s*\z/ ||
-                 l =~ Regexp.new("\\A\\s*" + I18n.t('user_notifications.previous_discussion') + "\\s*\\Z") ||
-                 (l =~ /via #{SiteSetting.title}(.*)\:$/) ||
-                 # This one might be controversial but so many reply lines have years, times and end with a colon.
-                 # Let's try it and see how well it works.
-                 (l =~ /\d{4}/ && l =~ /\d:\d\d/ && l =~ /\:$/) ||
-                 (l =~ /On \w+ \d+,? \d+,?.*wrote:/)
+        break unless line_is_quote?(l) or l =~ /^>/ or l.blank?
+        range_start = idx + 1
+      end
+
+      lines[range_start..-1].each_with_index do |l, idx|
+        break if line_is_quote?(l)
 
         # Headers on subsequent lines
         break if (0..2).all? { |off| lines[idx+off] =~ REPLYING_HEADER_REGEX }
         # Headers on the same line
         break if REPLYING_HEADER_LABELS.count { |lbl| l.include? lbl } >= 3
-
-        range_end = idx
+        range_end = range_start + idx
       end
 
-      lines[0..range_end].join.strip
-    end
-
-    def wrap_body_in_quote(user_email)
-      @body = "[quote=\"#{user_email}\"]
-#{@body}
-[/quote]"
+      lines[range_start..range_end].join.strip
     end
 
     private
+
+    def wrap_body_in_quote(user_email)
+      @body = "[quote=\"#{user_email}\"]\n#{@body}\n[/quote]"
+    end
 
     def create_reply
       create_post_with_attachments(@email_log.user,
@@ -234,7 +244,13 @@ module Email
           # create the upload for the user
           upload = Upload.create_for(user.id, tmp, attachment.filename, tmp.size)
           if upload && upload.errors.empty?
-            # TODO: should use the same code as the client to insert attachments
+            # try to inline images
+            if attachment.content_type.start_with?("image/")
+              if raw =~ /\[image: Inline image \d+\]/
+                raw.sub!(/\[image: Inline image \d+\]/, attachment_markdown(upload))
+                next
+              end
+            end
             raw << "\n#{attachment_markdown(upload)}\n"
           end
         ensure

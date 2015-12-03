@@ -3,10 +3,26 @@ import RestModel from 'discourse/models/rest';
 import { propertyEqual } from 'discourse/lib/computed';
 import { longDate } from 'discourse/lib/formatter';
 import computed from 'ember-addons/ember-computed-decorators';
+import ActionSummary from 'discourse/models/action-summary';
 
 const Topic = RestModel.extend({
   message: null,
   errorLoading: false,
+
+  @computed('posters.firstObject')
+  creator(poster){
+    return poster && poster.user;
+  },
+
+  @computed('posters.@each')
+  lastPoster(posters) {
+    if (posters && posters.length > 0) {
+      const latest = posters.filter(p => p.extras && p.extras.indexOf("latest") >= 0)[0];
+      return latest.user;
+    } else {
+      return this.get("creator");
+    }
+  },
 
   @computed('fancy_title')
   fancyTitle(title) {
@@ -400,7 +416,7 @@ Topic.reopenClass({
       result.actions_summary = result.actions_summary.map(function(a) {
         a.post = result;
         a.actionType = Discourse.Site.current().postActionTypeById(a.id);
-        const actionSummary = Discourse.ActionSummary.create(a);
+        const actionSummary = ActionSummary.create(a);
         lookup.set(a.actionType.get('name_key'), actionSummary);
         return actionSummary;
       });
