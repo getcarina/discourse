@@ -23,7 +23,7 @@ Discourse::Application.configure do
   config.assets.digest = true
 
   config.log_level = :info
-  config.logger = RemoteSyslogLogger.new('log3.papertrailapp.com', 27372 :program => "discourse")
+  config.logger = RemoteSyslogLogger.new('log3.papertrailapp.com', 27372, :program => "discourse")
 
   if GlobalSetting.smtp_address
     settings = {
